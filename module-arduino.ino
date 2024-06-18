@@ -127,6 +127,18 @@ void setup() {
 }
 
 void loop() {
+/**
+TODO
+
+- Serial read form tx/rx
+- manage alarms
+- manage pir
+- manage time
+
+- define use cases
+- create actuator functions
+ */
+
   int pir_input = digitalRead(PIN_PIR_SIG);
 
   // Serial.print("PIR = ");
