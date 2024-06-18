@@ -1,15 +1,19 @@
 #include <RtcDS1302.h>
+#include <AccelStepper.h>
 
-int PIN_TIME_RST = 13;
-int PIN_TIME_DAT = 12;
 int PIN_TIME_CLK = 11;
+int PIN_TIME_DAT = 12;
+int PIN_TIME_RST = 13;
 
-int PIN_STEP_EN = 10;
 int PIN_STEP_DIR = 8;
 int PIN_STEP_STEP = 9;
+int PIN_STEP_EN = 10;
+
+int PIN_PIR_SIG = 7;
 
 ThreeWire ds1302(PIN_TIME_DAT, PIN_TIME_CLK, PIN_TIME_RST); // IO, SCLK, CE
 RtcDS1302<ThreeWire> Rtc(ds1302);
+AccelStepper stepper(AccelStepper::DRIVER, PIN_STEP_STEP, PIN_STEP_DIR);   
 
 void setup() {
   Serial.begin(115200);
@@ -19,10 +23,16 @@ void setup() {
   pinMode(PIN_STEP_EN, OUTPUT);
   pinMode(PIN_STEP_DIR, OUTPUT);
   pinMode(PIN_STEP_STEP, OUTPUT);
+  
+  pinMode(PIN_PIR_SIG, INPUT);
 
   digitalWrite(PIN_STEP_EN, LOW);
   digitalWrite(PIN_STEP_DIR, LOW);
   digitalWrite(PIN_STEP_STEP, LOW);
+
+  stepper.setMaxSpeed(2000);
+  stepper.setAcceleration(1500);
+  stepper.setCurrentPosition(0);
 
   RtcDateTime compiled = RtcDateTime(__DATE__, __TIME__);
   printDateTime(compiled);
@@ -67,6 +77,11 @@ void setup() {
 }
 
 void loop() {
+  int pir_input = digitalRead(PIN_PIR_SIG);
+
+  Serial.print("PIR = ");
+  Serial.println(pir_input);
+
   static int delayMs = 800;
 
   Serial.println(delayMs);
@@ -92,7 +107,7 @@ void loop() {
       Serial.println("RTC lost confidence in the DateTime!");
   }
 
-  delay(10000); // ten seconds
+  delay(1000); // 1 seconds
 }
 
 #define countof(a) (sizeof(a) / sizeof(a[0]))
