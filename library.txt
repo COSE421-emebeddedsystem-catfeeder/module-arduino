@@ -1,0 +1,6 @@
+rtc-by-makuna@2.4.3
+    https://www.arduino.cc/reference/en/libraries/rtc-by-makuna/
+    https://github.com/Makuna/Rtc/wiki
+AccelStepper@1.64
+    https://www.arduino.cc/reference/en/libraries/accelstepper/
+    https://www.airspayce.com/mikem/arduino/AccelStepper/
