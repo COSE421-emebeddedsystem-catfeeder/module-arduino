@@ -1,7 +1,9 @@
-#include <RtcDS1302.h>
-#include <AccelStepper.h>
 #include "RtcAlarmManager.h"
+#include <AccelStepper.h>
+#include <RtcDS1302.h>
 #include <Wire.h>
+
+#define MAX_ALARMS 10
 
 int PIN_TIME_CLK = 11;
 int PIN_TIME_DAT = 12;
@@ -13,25 +15,26 @@ int PIN_STEP_EN = 10;
 
 int PIN_PIR_SIG = 7;
 
+int alarm_last_idx = 0;
+
 ThreeWire ds1302(PIN_TIME_DAT, PIN_TIME_CLK, PIN_TIME_RST); // IO, SCLK, CE
 RtcDS1302<ThreeWire> Rtc(ds1302);
-AccelStepper stepper(AccelStepper::DRIVER, PIN_STEP_STEP, PIN_STEP_DIR);   
+AccelStepper stepper(AccelStepper::DRIVER, PIN_STEP_STEP, PIN_STEP_DIR);
 
 // foreward declare our alarm manager callback
-void alarmCallback(uint8_t id, const RtcDateTime& alarm);
+void alarmCallback(uint8_t id, const RtcDateTime &alarm);
 // global instance of the manager with three possible alarms
-RtcAlarmManager<alarmCallback> Alarms(3);
-
+RtcAlarmManager<alarmCallback> Alarms(MAX_ALARMS);
 
 void setup() {
   Serial.begin(115200);
 
   Rtc.Begin();
-   
+
   pinMode(PIN_STEP_EN, OUTPUT);
   pinMode(PIN_STEP_DIR, OUTPUT);
   pinMode(PIN_STEP_STEP, OUTPUT);
-  
+
   pinMode(PIN_PIR_SIG, INPUT);
 
   digitalWrite(PIN_STEP_EN, LOW);
@@ -42,102 +45,109 @@ void setup() {
   stepper.setAcceleration(1500);
   stepper.setCurrentPosition(0);
 
-  RtcDateTime compiled = RtcDateTime(__DATE__, __TIME__);
-  printDateTime(compiled);
-  Serial.println();
+  Rtc.SetIsWriteProtected(false);
+  Rtc.SetIsRunning(true);
 
-  if (!Rtc.IsDateTimeValid()) 
-  {
-      // Common Causes:
-      //    1) first time you ran and the device wasn't running yet
-      //    2) the battery on the device is low or even missing
+  Serial.println("Running...");
+}
 
-      Serial.println("RTC lost confidence in the DateTime!");
-      Rtc.SetDateTime(compiled);
-  }
+void clearAlarm() {
+  Serial.println("Resetting alarms");
 
-  if (Rtc.GetIsWriteProtected())
-  {
-      Serial.println("RTC was write protected, enabling writing now");
-      Rtc.SetIsWriteProtected(false);
-  }
-
-  if (!Rtc.GetIsRunning())
-  {
-      Serial.println("RTC was not actively running, starting now");
-      Rtc.SetIsRunning(true);
+  for (int i = 0; i < MAX_ALARMS; i++) {
+    Alarms.RemoveAlarm(i);
   }
 
   RtcDateTime now = Rtc.GetDateTime();
-  if (now < compiled) 
-  {
-      Serial.println("RTC is older than compile time!  (Updating DateTime)");
-      Rtc.SetDateTime(compiled);
-  }
-  else if (now > compiled) 
-  {
-      Serial.println("RTC is newer than compile time. (this is expected)");
-  }
-  else if (now == compiled) 
-  {
-      Serial.println("RTC is the same as compile time! (not expected but all is fine)");
-  }
 
   // Sync the Alarms to current time
   Alarms.Sync(now);
 
-  // NOTE:  Due to this sketch not deleting alarms, the returned ids from
-    // AddAlarm can be assumed to start at zero and increment from there.
-    // Otherwise the ids would need to be captured and used in the callback
-    //
-    int8_t result;
-    // add an alarm to sync time from rtc at a regular interval,
-    // due to CPU timing variance, the Alarms time can get off over
-    // time, so this alarm will trigger a resync every 20 minutes 
-    result = Alarms.AddAlarm(now, 2 * c_MinuteAsSeconds); // every 2 minutes
-    if (result < 0) 
-    {
-        // an error happened
-        Serial.print("AddAlarm Sync failed : ");
-        Serial.print(result);
-    }
+  int result = Alarms.AddAlarm(now, 120 * c_MinuteAsSeconds); // every 2 minutes
+  if (result < 0) {
+    // an error happened
+    Serial.print("AddAlarm Sync failed : ");
+    Serial.print(result);
+  }
 
-    // add a daily alarm at 5:30am
-    RtcDateTime working(now.Year(), now.Month(), now.Day(), 5, 30, 0);
-    result = Alarms.AddAlarm(working, AlarmPeriod_Daily);
-    if (result < 0)
-    {
-        // an error happened
-        Serial.print("AddAlarm Daily failed : ");
-        Serial.print(result);
-    }
+  Serial.println("Resetting alarm done");
+}
 
-    // add a weekly alarm for Saturday at 7:30am
-    working = RtcDateTime(now.Year(), now.Month(), now.Day(), 7, 30, 0);
-    working = working.NextDayOfWeek(DayOfWeek_Saturday);
-    result = Alarms.AddAlarm(working, AlarmPeriod_Weekly);
-    if (result < 0)
-    {
-        // an error happened
-        Serial.print("AddAlarm Weekly failed : ");
-        Serial.print(result);
-    }
+void updateNow(uint16_t year, uint8_t month, uint8_t dayOfMonth, uint8_t hour,
+               uint8_t minute, uint8_t second) {
+  RtcDateTime target(year, month, dayOfMonth, hour, minute, second);
+  Rtc.SetDateTime(target);
 
-    Serial.println("Running...");
+  Serial.print("Time configured @ (");
+  printDateTime(target);
+  Serial.println(")");
+}
+
+void setAlarm(uint16_t year, uint8_t month, uint8_t dayOfMonth, uint8_t hour,
+              uint8_t minute, uint8_t second) {
+  if (alarm_last_idx + 1 >= MAX_ALARMS) {
+    Serial.println("Max Alarm size exceeded!");
+    return;
+  }
+  RtcDateTime target(year, month, dayOfMonth, hour, minute, second);
+
+  int result = Alarms.AddAlarm(target, AlarmPeriod_Daily);
+  if (result < 0) {
+    // an error happened
+    Serial.print("AddAlarm Daily failed : ");
+    Serial.print(result);
+    return;
+  }
+
+  alarm_last_idx = result;
+  Serial.print("New alarm set (");
+  printDateTime(target);
+  Serial.print(") = ");
+  Serial.print(alarm_last_idx);
+  Serial.println();
 }
 
 void loop() {
-/**
-TODO
+  delay(5000);
 
-- Serial read form tx/rx
-- manage alarms
-- manage pir
-- manage time
+  updateNow(2024, 6, 18, 21, 40, 0);
 
-- define use cases
-- create actuator functions
- */
+  clearAlarm();
+
+  // InitWithDateTimeFormatString<RtcLocaleEnUs>(F("MMM DD YYYY"), date);
+  // InitWithDateTimeFormatString<RtcLocaleEnUs>(F("hh:mm:ss"), time);
+
+  setAlarm(2024, 6, 18, 21, 40, 5);
+
+  while (1) {
+    delay(1000); // 1000 ms
+
+    RtcDateTime now = Rtc.GetDateTime();
+    Alarms.Sync(now);
+    Serial.print("Now = ");
+    printDateTime(now);
+    Serial.print(" ");
+    Serial.print(now.Ntp32Time());
+    Serial.println();
+
+    Alarms.ProcessAlarms();
+
+    Serial.println(Alarms._seconds);
+    for (int i = 0; i < MAX_ALARMS; i++) {
+      Serial.println(Alarms._alarms[i].When);
+    }
+  }
+  /**
+  TODO
+
+  - Serial read form tx/rx
+  - manage alarms
+  - manage pir
+  - manage time
+
+  - define use cases
+  - create actuator functions
+   */
 
   int pir_input = digitalRead(PIN_PIR_SIG);
 
@@ -146,8 +156,8 @@ TODO
 
   static int delayMs = 800;
 
-  for(int l = 0; l < 5; l++) {
-    for(int i = 0; i < 200; i++) {
+  for (int l = 0; l < 5; l++) {
+    for (int i = 0; i < 200; i++) {
       digitalWrite(PIN_STEP_STEP, LOW);
       delayMicroseconds(delayMs);
       digitalWrite(PIN_STEP_STEP, HIGH);
@@ -163,57 +173,49 @@ TODO
   // if (!now.IsValid())
   // {
   //     // Common Causes:
-  //     //    1) the battery on the device is low or even missing and the power line was disconnected
-  //     Serial.println("RTC lost confidence in the DateTime!");
+  //     //    1) the battery on the device is low or even missing and the power
+  //     line was disconnected Serial.println("RTC lost confidence in the
+  //     DateTime!");
   // }
 
   delay(100); // 100 ms
   Alarms.ProcessAlarms();
+
+  Alarms.RemoveAlarm(4);
 }
 
 #define countof(a) (sizeof(a) / sizeof(a[0]))
 
-void printDateTime(const RtcDateTime& dt)
-{
-    char datestring[26];
+void alarmCallback(uint8_t id, [[maybe_unused]] const RtcDateTime &alarm) {
+  Serial.print("Alarm triggered! =");
+  Serial.println(id);
+  // NOTE:  Due to this sketch not deleting alarms, the returned ids from
+  // AddAlarm can be assumed to start at zero and increment from there.
+  // Otherwise the ids would need to be captured and used here
+  //
+  switch (id) {
+  case 0: {
+    // periodic sync from trusted source to minimize
+    // drift due to inaccurate CPU timing
+    RtcDateTime now = Rtc.GetDateTime();
+    Alarms.Sync(now);
+    printDateTime(now);
+  }
+    Serial.println(" @ INTERVAL ALARM: Alaram time synced!");
+    break;
 
-    snprintf_P(datestring, 
-            countof(datestring),
-            PSTR("%02u/%02u/%04u %02u:%02u:%02u"),
-            dt.Month(),
-            dt.Day(),
-            dt.Year(),
-            dt.Hour(),
-            dt.Minute(),
-            dt.Second() );
-    Serial.print(datestring);
+  default:
+    RtcDateTime now = Rtc.GetDateTime();
+    printDateTime(now);
+    Serial.println(" @ Alarm triggered!, Give food!!");
+  }
 }
 
-void alarmCallback(uint8_t id, [[maybe_unused]] const RtcDateTime& alarm)
-{
-    Serial.println("Alarm triggered!");
-    // NOTE:  Due to this sketch not deleting alarms, the returned ids from
-    // AddAlarm can be assumed to start at zero and increment from there.
-    // Otherwise the ids would need to be captured and used here 
-    //
-    switch (id)
-    {
-    case 0:
-        {   
-            // periodic sync from trusted source to minimize
-            // drift due to inaccurate CPU timing
-            RtcDateTime now = Rtc.GetDateTime();
-            Alarms.Sync(now); 
-        }
-        Serial.println("INTERVAL ALARM: Alaram time synced!");
-        break;
+void printDateTime(const RtcDateTime &dt) {
+  char datestring[26];
 
-    case 1:
-        Serial.println("DAILY ALARM: Its 5:30am!");
-        break;
-
-    case 2:
-        Serial.println("WEEKLY ALARM: Its Saturday at 7:30am!");
-        break;
-    }
+  snprintf_P(datestring, countof(datestring),
+             PSTR("%04u-%02u-%02u %02u:%02u:%02u"), dt.Year(), dt.Month(),
+             dt.Day(), dt.Hour(), dt.Minute(), dt.Second());
+  Serial.print(datestring);
 }
