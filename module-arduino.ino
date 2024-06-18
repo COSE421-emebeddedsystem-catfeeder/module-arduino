@@ -26,6 +26,13 @@ void alarmCallback(uint8_t id, const RtcDateTime &alarm);
 // global instance of the manager with three possible alarms
 RtcAlarmManager<alarmCallback> Alarms(MAX_ALARMS);
 
+struct Config {
+  int USE_PIR;
+  int FOOD_AMT;
+};
+
+Config config  = {false, 5} ;
+
 void setup() {
   Serial.begin(115200);
 
@@ -73,23 +80,26 @@ void clearAlarm() {
   Serial.println("Resetting alarm done");
 }
 
-void updateNow(uint16_t year, uint8_t month, uint8_t dayOfMonth, uint8_t hour,
-               uint8_t minute, uint8_t second) {
-  RtcDateTime target(year, month, dayOfMonth, hour, minute, second);
+void updateNow(char *time) {
+  RtcDateTime target;
+  target.InitWithDateTimeFormatString(F("YYYY-MM-DDThh:mm:ssz"), time);
+
   Rtc.SetDateTime(target);
+  Alarms.Sync(target);
 
   Serial.print("Time configured @ (");
   printDateTime(target);
   Serial.println(")");
 }
 
-void setAlarm(uint16_t year, uint8_t month, uint8_t dayOfMonth, uint8_t hour,
-              uint8_t minute, uint8_t second) {
+void setAlarm(char *time) {
   if (alarm_last_idx + 1 >= MAX_ALARMS) {
     Serial.println("Max Alarm size exceeded!");
     return;
   }
-  RtcDateTime target(year, month, dayOfMonth, hour, minute, second);
+
+  RtcDateTime target;
+  target.InitWithDateTimeFormatString(F("YYYY-MM-DDThh:mm:ssz"), time);
 
   int result = Alarms.AddAlarm(target, AlarmPeriod_Daily);
   if (result < 0) {
@@ -107,56 +117,11 @@ void setAlarm(uint16_t year, uint8_t month, uint8_t dayOfMonth, uint8_t hour,
   Serial.println();
 }
 
-void loop() {
-  delay(5000);
-
-  updateNow(2024, 6, 18, 21, 40, 0);
-
-  clearAlarm();
-
-  // InitWithDateTimeFormatString<RtcLocaleEnUs>(F("MMM DD YYYY"), date);
-  // InitWithDateTimeFormatString<RtcLocaleEnUs>(F("hh:mm:ss"), time);
-
-  setAlarm(2024, 6, 18, 21, 40, 5);
-
-  while (1) {
-    delay(1000); // 1000 ms
-
-    RtcDateTime now = Rtc.GetDateTime();
-    Alarms.Sync(now);
-    Serial.print("Now = ");
-    printDateTime(now);
-    Serial.print(" ");
-    Serial.print(now.Ntp32Time());
-    Serial.println();
-
-    Alarms.ProcessAlarms();
-
-    Serial.println(Alarms._seconds);
-    for (int i = 0; i < MAX_ALARMS; i++) {
-      Serial.println(Alarms._alarms[i].When);
-    }
-  }
-  /**
-  TODO
-
-  - Serial read form tx/rx
-  - manage alarms
-  - manage pir
-  - manage time
-
-  - define use cases
-  - create actuator functions
-   */
-
-  int pir_input = digitalRead(PIN_PIR_SIG);
-
-  // Serial.print("PIR = ");
-  // Serial.println(pir_input);
-
+void giveFood() {
+  Serial.println("Motor started");
   static int delayMs = 800;
 
-  for (int l = 0; l < 5; l++) {
+  for (int l = 0; l < config.FOOD_AMT; l++) {
     for (int i = 0; i < 200; i++) {
       digitalWrite(PIN_STEP_STEP, LOW);
       delayMicroseconds(delayMs);
@@ -164,24 +129,99 @@ void loop() {
       delayMicroseconds(delayMs);
     }
   }
+  Serial.println("Motor stopped");
+}
 
-  // RtcDateTime now = Rtc.GetDateTime();
+String CMD_STARTS(">>>");
 
-  // printDateTime(now);
-  // Serial.println();
+void processCmd() {
+  String cmd;
+  String operand;
+  char *cmd_buf;
 
-  // if (!now.IsValid())
-  // {
-  //     // Common Causes:
-  //     //    1) the battery on the device is low or even missing and the power
-  //     line was disconnected Serial.println("RTC lost confidence in the
-  //     DateTime!");
-  // }
+  do {
+    cmd = Serial.readStringUntil('\n');
 
-  delay(100); // 100 ms
+    if (cmd.startsWith(CMD_STARTS)) {
+      cmd_buf = cmd.c_str();
+
+      char cmd_code = cmd_buf[3];
+      operand = cmd.substring(5);
+
+      Serial.print("CMD = '");
+      Serial.print(cmd_code);
+      Serial.print("', '");
+      Serial.print(operand);
+      Serial.println("'");
+
+      switch (cmd_code) {
+      case '?':
+        Serial.println("Cmd Help\n"
+                       "?                        > Print help message\n"
+                       "0                        > Clear config / alarms\n"
+                       "1:{0|1}                  > Configure PIR enable\n"
+                       "2:{YYYY-MM-DDThh:mm:ssz} > Set time\n"
+                       "3:{YYYY-MM-DDThh:mm:ssz} > Set alarm\n"
+                       "4                        > Give food\n"
+                       "5                        > Show stat\n"
+                       "6:{int}                  > Set food amount \n");
+        break;
+      case '0':
+        config.USE_PIR = false;
+        clearAlarm();
+        break;
+      case '1':
+        config.USE_PIR = operand.equals("1");
+        break;
+      case '2':
+        updateNow(operand.c_str());
+        break;
+      case '3':
+        setAlarm(operand.c_str());
+        break;
+      case '4':
+        giveFood();
+        break;
+      case '5':
+        static char buffer[256];
+
+        RtcDateTime dt = Rtc.GetDateTime();
+        snprintf_P(buffer, countof(buffer),
+                   PSTR("| Clock    = %04u-%02u-%02u %02u:%02u:%02u\n"
+                        "| PIR      = %d\n"
+                        "| Alarms   = %d\n"
+                        "| FOOD_AMT = %d\n"
+                        ),
+                   dt.Year(), dt.Month(), dt.Day(), dt.Hour(), dt.Minute(),
+                   dt.Second(), config.USE_PIR, alarm_last_idx, config.FOOD_AMT);
+
+        Serial.println(buffer);
+        break;
+        case '6':
+        config.FOOD_AMT = operand.toInt();
+        break;
+      }
+    }
+  } while (cmd.length() != 0);
+}
+
+void loop() {
   Alarms.ProcessAlarms();
 
-  Alarms.RemoveAlarm(4);
+  delay(1000);
+
+  if (digitalRead(PIN_PIR_SIG)) {
+    if (config.USE_PIR) {
+      Serial.println("PIR Detected. Give food!");
+      giveFood();
+    } else {
+      Serial.println("PIR Detected. configured not to give food..");
+    }
+
+    delay(5000);
+  }
+
+  processCmd();
 }
 
 #define countof(a) (sizeof(a) / sizeof(a[0]))
@@ -208,6 +248,7 @@ void alarmCallback(uint8_t id, [[maybe_unused]] const RtcDateTime &alarm) {
     RtcDateTime now = Rtc.GetDateTime();
     printDateTime(now);
     Serial.println(" @ Alarm triggered!, Give food!!");
+    giveFood();
   }
 }
 
